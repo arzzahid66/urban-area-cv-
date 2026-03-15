@@ -1,23 +1,23 @@
 import os
-import sys
-
-# ── Patch: prevent libGL error on headless servers ────────────
-os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "0"
+# Must be set before ANY other import
 os.environ["MPLBACKEND"] = "Agg"
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["DISPLAY"] = ""
 
+# Forcibly remove full opencv-python so headless wins
+import sys
+import subprocess
+subprocess.run(
+    [sys.executable, "-m", "pip", "uninstall", "opencv-python", "-y"],
+    capture_output=True
+)
+
 import streamlit as st
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 import tempfile
 
-# ── Page config ───────────────────────────────────────────────
-st.set_page_config(
-    page_title="Trash Detection",
-    page_icon="🗑️",
-    layout="centered",
-)
+st.set_page_config(page_title="Trash Detection", page_icon="🗑️", layout="centered")
 
 st.title("🗑️ Trash Detection App")
 st.markdown("Upload your **YOLOv8 model** and an **image** to detect trash categories.")
@@ -25,35 +25,32 @@ st.markdown("**Classes:** `Glass` · `Metal` · `Paper` · `Plastic` · `Waste`"
 st.divider()
 
 CLASS_COLORS = {
-    "glass":   "#3B82F6",
-    "metal":   "#6B7280",
-    "paper":   "#F59E0B",
-    "plastic": "#10B981",
-    "waste":   "#EF4444",
+    "glass":   (59,  130, 246),   # blue
+    "metal":   (107, 114, 128),   # gray
+    "paper":   (245, 158,  11),   # amber
+    "plastic": ( 16, 185, 129),   # green
+    "waste":   (239,  68,  68),   # red
 }
 
-def hex_to_rgb(h):
-    h = h.lstrip("#")
-    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-
 def draw_boxes(image: Image.Image, result, names: dict) -> Image.Image:
-    img = image.copy()
+    img  = image.copy()
     draw = ImageDraw.Draw(img)
-    if result.boxes is None:
+    if result.boxes is None or len(result.boxes) == 0:
         return img
     for box in result.boxes:
         cls_id   = int(box.cls[0])
-        cls_name = names[cls_id].capitalize()
+        cls_name = names[cls_id].lower()
         conf_val = float(box.conf[0])
         x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-        color = hex_to_rgb(CLASS_COLORS.get(cls_name.lower(), "#8B5CF6"))
+        color = CLASS_COLORS.get(cls_name, (139, 92, 246))
         draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
-        label = f"{cls_name} {conf_val:.0%}"
-        bbox  = draw.textbbox((x1, y1), label)
+        label = f"{cls_name.capitalize()} {conf_val:.0%}"
+        bbox  = draw.textbbox((x1, y1 - 18), label)
         draw.rectangle([bbox[0]-2, bbox[1]-2, bbox[2]+2, bbox[3]+2], fill=color)
-        draw.text((x1, y1), label, fill="white")
+        draw.text((x1, y1 - 18), label, fill="white")
     return img
 
+# ── Sidebar ───────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Settings")
     model_file  = st.file_uploader("📦 Upload model (.pt)", type=["pt"])
@@ -80,7 +77,8 @@ if model_file:
 else:
     st.info("👈 Upload your `trash_best.pt` model in the sidebar to get started.")
 
-image_file = st.file_uploader("🖼️ Upload a trash image", type=["jpg", "jpeg", "png", "webp", "bmp"])
+# ── Inference ─────────────────────────────────────────────────
+image_file = st.file_uploader("🖼️ Upload a trash image", type=["jpg","jpeg","png","webp","bmp"])
 
 if image_file and model:
     image = Image.open(image_file).convert("RGB")
@@ -110,11 +108,11 @@ if image_file and model:
     if boxes is None or len(boxes) == 0:
         st.warning("⚠️ No trash detected. Try lowering the confidence threshold.")
     else:
-        st.subheader(f"📋 Detection Summary  —  {len(boxes)} object(s) found")
+        st.subheader(f"📋 Detection Summary — {len(boxes)} object(s) found")
 
-        names         = model.names
+        names = model.names
         class_counts: dict[str, int] = {}
-        detections    = []
+        detections = []
 
         for box in boxes:
             cls_id   = int(box.cls[0])
@@ -125,15 +123,13 @@ if image_file and model:
 
         badge_cols = st.columns(len(class_counts))
         for idx, (cls_name, count) in enumerate(sorted(class_counts.items())):
-            color = CLASS_COLORS.get(cls_name.lower(), "#8B5CF6")
+            r, g, b = CLASS_COLORS.get(cls_name.lower(), (139, 92, 246))
+            color_hex = f"#{r:02x}{g:02x}{b:02x}"
             with badge_cols[idx]:
                 st.markdown(
-                    f"""
-                    <div style="background:{color};padding:10px 6px;border-radius:10px;
-                                text-align:center;color:white;font-weight:600;">
-                        {cls_name}<br><span style="font-size:1.4rem">{count}</span>
-                    </div>
-                    """,
+                    f"""<div style="background:{color_hex};padding:10px 6px;border-radius:10px;
+                        text-align:center;color:white;font-weight:600;">
+                        {cls_name}<br><span style="font-size:1.4rem">{count}</span></div>""",
                     unsafe_allow_html=True,
                 )
 
